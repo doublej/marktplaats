@@ -1,0 +1,30 @@
+{
+  "name": "marktplaats",
+  "version": "0.1.0",
+  "description": "MP better ui",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --bun vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json"
+  },
+  "dependencies": {
+    "@auth/sveltekit": "^1.11.1",
+    "marktplaats-js": "file:../backend"
+  },
+  "devDependencies": {
+    "@sveltejs/adapter-auto": "^3.0.0",
+    "@sveltejs/adapter-node": "^5.4.0",
+    "@sveltejs/kit": "^2.0.0",
+    "@sveltejs/vite-plugin-svelte": "^4.0.0",
+    "@unocss/extractor-svelte": "^65.4.3",
+    "@unocss/reset": "^66.5.10",
+    "@unocss/svelte-scoped": "^65.4.3",
+    "svelte": "^5.0.0",
+    "svelte-check": "^4.0.0",
+    "typescript": "^5.0.0",
+    "unocss": "^65.4.3",
+    "vite": "^5.0.0"
+  }
+}

@@ -1,0 +1,378 @@
+# Marktplaats API Specification
+# Language-agnostic reference for interacting with marktplaats.nl
+
+meta:
+  version: "1.0"
+  source: "Extracted from MarktplaatsSearch Python codebase"
+  website: "https://www.marktplaats.nl"
+
+# =============================================================================
+# ENDPOINTS
+# =============================================================================
+endpoints:
+  base_url: "https://www.marktplaats.nl"
+
+  search:
+    pattern: "/q/{query}/"
+    method: GET
+    notes:
+      - Query must be lowercase to avoid redirects
+      - Query must be URL-encoded (spaces -> %20 or +)
+
+    parameters:
+      postcode:
+        type: string
+        format: "Dutch postal code (e.g., 1012AB)"
+        required: false
+
+      distanceMeters:
+        type: integer
+        unit: meters
+        notes: "Convert km to meters (km * 1000)"
+        required: false
+
+      PriceCentsFrom:
+        type: integer
+        unit: cents
+        notes: "Convert euros to cents (euros * 100)"
+        required: false
+
+      PriceCentsTo:
+        type: integer
+        unit: cents
+        notes: "Convert euros to cents (euros * 100)"
+        required: false
+
+      sortBy:
+        type: enum
+        values:
+          - PRICE
+          - DATE
+          - OPTIMIZED  # relevance/default
+        required: false
+
+      sortOrder:
+        type: enum
+        values:
+          - INCREASING  # asc
+          - DECREASING  # desc
+        required: false
+
+  listing_detail:
+    pattern: "/v/{category}/m{listing_id}-{slug}/"
+    notes: "Category and slug are optional for access"
+
+# =============================================================================
+# HTTP HEADERS (for web scraping)
+# =============================================================================
+headers:
+  required:
+    User-Agent: "Random browser user agent"
+    Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+    Accept-Language: "nl-NL,nl;q=0.9,en;q=0.8"
+    Accept-Encoding: "gzip, deflate, br"
+    Connection: "keep-alive"
+    Upgrade-Insecure-Requests: "1"
+    Sec-Fetch-Dest: "document"
+    Sec-Fetch-Mode: "navigate"
+    Sec-Fetch-Site: "none"
+
+  rate_limiting:
+    min_delay_seconds: 1.0
+    requests_per_minute: 30
+    burst_size: 5
+
+# =============================================================================
+# DATA MODELS
+# =============================================================================
+models:
+  Listing:
+    source_listing_id:
+      type: string
+      format: "m{digits}"  # e.g., m1234567890
+      extraction: "regex: /m(\\d+)-"
+
+    title:
+      type: string
+      max_length: 200
+      cleaning: "Remove price patterns, 'details' suffix, normalize whitespace"
+
+    price:
+      type: string
+      display_format: "€ {amount}"
+      examples:
+        - "€ 500"
+        - "€ 1.234,56"
+        - "Price on request"
+        - "€ 0"  # gratis
+
+    price_numeric:
+      type: integer
+      nullable: true
+      unit: cents
+      notes: "Store in cents for precise integer math"
+
+    url:
+      type: url
+      format: "https://www.marktplaats.nl/v/...or /a/..."
+
+    description_snippet:
+      type: string
+      nullable: true
+      max_length: 200
+
+    image_url:
+      type: url
+      nullable: true
+      notes: "May be lazy-loaded (data-src, data-lazy-src)"
+
+    location:
+      type: string
+      nullable: true
+
+    seller:
+      type: string
+      nullable: true
+      max_length: 50
+
+    views:
+      type: integer
+      nullable: true
+      extraction: "regex: (\\d+)\\s*(?:keer\\s*)?bekeken"
+
+    condition:
+      type: enum
+      nullable: true
+      values:
+        - Nieuw
+        - Gebruikt
+        - Zo goed als nieuw
+        - Redelijke staat
+        - Matige staat
+
+    date_posted:
+      type: datetime
+      nullable: true
+
+# =============================================================================
+# PRICE PARSING
+# =============================================================================
+price_parsing:
+  special_values:
+    "vraagprijs": { display: "Price on request", numeric: null }
+    "v.o.n": { display: "Price on request", numeric: null }
+    "gratis": { display: "€ 0", numeric: 0 }
+
+  european_format:
+    description: "Dutch/European price format"
+    thousands_separator: "."
+    decimal_separator: ","
+    examples:
+      "€ 500": 50000
+      "€ 500,00": 50000
+      "€ 1.234,56": 123456
+      "1.500": 150000
+      "500,50": 50050
+
+  detection_logic: |
+    if has_both_comma_and_dot:
+      if comma_position > dot_position:
+        # European: 1.234,56
+        remove dots, replace comma with dot
+      else:
+        # US: 1,234.56
+        remove commas
+    elif has_comma_only:
+      if comma_followed_by_exactly_2_digits:
+        # Decimal: 500,50
+        replace comma with dot
+      else:
+        # Thousands: 1,500
+        remove comma
+
+    return int(float(normalized) * 100)
+
+# =============================================================================
+# TEXT CLEANING
+# =============================================================================
+text_cleaning:
+  title:
+    remove:
+      - price_patterns: "€\\s*[\\d.,]+|[\\d,]+\\s*€"
+      - details_suffix: "\\s*details\\s*.*$"
+      - trailing_numbers: "\\s*\\d+\\s*$"
+      - trailing_punctuation: "[|,]\\s*$"
+    normalize:
+      - collapse_whitespace: "\\s+ -> single space"
+      - trim: "remove leading/trailing whitespace"
+
+  description:
+    remove:
+      - price_patterns: "€\\s*[\\d.,]+|\\$\\s*[\\d.,]+"
+      - metadata: "details|Ophalen|Verzenden|Gebruikt|Nieuw"
+      - flag_emoji: "🇳🇱"
+    min_length: 10
+    min_alphanum: 5
+
+# =============================================================================
+# HTML PARSING (CSS selectors and patterns)
+# =============================================================================
+html_parsing:
+  listing_containers:
+    primary: "div.hz-Listing-item-wrapper"
+    fallback_1: "div.hz-Listing-listview-content"
+    fallback_2: "a[href*='/m']"  # links with listing pattern
+
+  fields:
+    url:
+      selector: "a[href*='/m']"
+      attribute: "href"
+      prefix_if_relative: "https://www.marktplaats.nl"
+
+    title:
+      selectors:
+        - "h1.title, h2.title, h3.title"
+        - ".hz-Listing-title"
+        - "a[href*='/m']"  # link text as fallback
+
+    price:
+      selectors:
+        - "[class*='price']"
+        - "span:contains('€')"
+        - "div:contains('€')"
+      patterns:
+        - "€\\s*[\\d.,]+(?:\\s*,-)?'"
+        - "euro\\s*[\\d.,]+"
+        - "[\\d.,]+\\s*euro"
+
+    image:
+      selector: "img"
+      attributes:
+        - "src"
+        - "data-src"
+        - "data-lazy-src"
+      ignore_prefixes:
+        - "data:"  # base64 placeholders
+
+# =============================================================================
+# MARKTPLAATS LIBRARY (PyPI: marktplaats>=0.3.1)
+# =============================================================================
+library:
+  package: "marktplaats"
+  min_version: "0.3.1"
+
+  search_query:
+    class: "SearchQuery"
+    parameters:
+      query: { type: string }
+      limit: { type: int, max: 100 }
+      zip_code: { type: string }
+      distance: { type: int, unit: meters }
+      price_from: { type: int, unit: euros }
+      price_to: { type: int, unit: euros }
+      sort_by: { type: "SortBy enum" }
+      sort_order: { type: "SortOrder enum" }
+      condition: { type: "Condition enum" }
+      category: { type: string }
+
+  enums:
+    SortBy:
+      - DATE
+      - PRICE
+      - LOCATION
+      - OPTIMIZED
+
+    SortOrder:
+      - ASC
+      - DESC
+
+    Condition:
+      - NEW
+      - USED
+
+  listing_fields:
+    id: string
+    title: string
+    description: string
+    link: url
+    date: datetime
+    first_image: url
+    images: array
+    price:
+      amount: float
+      price_type: string
+      price_type_text: string
+    location:
+      city: string
+      distance: int
+      latitude: float
+      longitude: float
+    seller:
+      id: string
+      name: string
+    category:
+      id: string
+
+# =============================================================================
+# ERROR HANDLING
+# =============================================================================
+errors:
+  rate_limited:
+    http_code: 429
+    action: "exponential backoff, retry after delay"
+
+  blocked:
+    detection:
+      - "blocked" in response_text
+      - "captcha" in response_text
+    action: "rotate user agent, wait longer, or stop"
+
+  circuit_breaker:
+    threshold: 5  # consecutive failures
+    timeout_seconds: 60
+    states:
+      - HEALTHY
+      - DEGRADED
+      - UNAVAILABLE
+
+# =============================================================================
+# DUTCH LOCALIZATION
+# =============================================================================
+localization:
+  months:
+    jan: 1
+    feb: 2
+    mrt: 3
+    apr: 4
+    mei: 5
+    jun: 6
+    jul: 7
+    aug: 8
+    sep: 9
+    okt: 10
+    nov: 11
+    dec: 12
+
+  relative_dates:
+    vandaag: "today"
+    gisteren: "yesterday"
+    uur: "hour"
+    dag: "day"
+    dagen: "days"
+    week: "week"
+    weken: "weeks"
+    maand: "month"
+    maanden: "months"
+    geleden: "ago"
+
+  conditions:
+    nieuw: "new"
+    gebruikt: "used"
+    "zo goed als nieuw": "like new"
+    "redelijke staat": "fair condition"
+    "matige staat": "poor condition"
+
+  price_labels:
+    vraagprijs: "price on request"
+    gratis: "free"
+    bieden: "make offer"

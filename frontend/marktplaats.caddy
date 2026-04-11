@@ -1,0 +1,4 @@
+marktplaats.jurrejan.com {
+	import security_headers
+	reverse_proxy 172.29.20.1:3101
+}

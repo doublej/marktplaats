@@ -1,0 +1,247 @@
+:root {
+	color-scheme: light dark;
+	--accent: #e36414;
+	--accent-light: #fb923c;
+	--accent-subtle: #fef3e7;
+	--accent-dark: #c2410c;
+}
+
+html.dark {
+	--accent: #fb923c;
+	--accent-light: #fdba74;
+	--accent-subtle: #27201a;
+	--accent-dark: #f97316;
+}
+
+html {
+	font-family: 'DM Sans', system-ui, sans-serif;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+	scrollbar-gutter: stable;
+}
+
+body {
+	margin: 0;
+	background:
+		radial-gradient(circle at center, rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+		linear-gradient(
+			135deg,
+			#fefdfb 0%,
+			#fef7ed 25%,
+			#fdf4f3 50%,
+			#faf5ff 75%,
+			#f8fafc 100%
+		);
+	background-size: 4px 4px, 100% 100%;
+	color: #18181b;
+	min-height: 100vh;
+}
+
+html.dark body {
+	background:
+		radial-gradient(circle at center, rgba(255, 255, 255, 0.015) 1px, transparent 1px),
+		linear-gradient(
+			135deg,
+			#0c0a09 0%,
+			#1c1917 25%,
+			#18181b 50%,
+			#1e1b4b 75%,
+			#0f172a 100%
+		);
+	background-size: 4px 4px, 100% 100%;
+	color: #fafafa;
+	min-height: 100vh;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+a {
+	color: inherit;
+	text-decoration: none;
+}
+
+::selection {
+	background: var(--accent);
+	color: white;
+}
+
+.font-display {
+	font-family: 'Instrument Serif', Georgia, serif;
+}
+
+
+/* Gradient that tapers/fades off */
+.gradient-fade {
+	position: relative;
+}
+
+.gradient-fade::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	height: 400px;
+	background: linear-gradient(
+		180deg,
+		rgba(254, 243, 231, 0.4) 0%,
+		rgba(253, 244, 243, 0.2) 40%,
+		transparent 100%
+	);
+	pointer-events: none;
+	z-index: 0;
+}
+
+html.dark .gradient-fade::before {
+	background: linear-gradient(
+		180deg,
+		rgba(28, 25, 23, 0.5) 0%,
+		rgba(30, 27, 45, 0.2) 40%,
+		transparent 100%
+	);
+}
+
+/* Form panel with tapering gradient */
+.form-panel-fade {
+	position: relative;
+}
+
+.form-panel-fade::before {
+	content: '';
+	position: absolute;
+	left: 0;
+	right: 0;
+	top: 0;
+	height: 100%;
+	background: linear-gradient(
+		180deg,
+		rgba(255, 247, 237, 0.85) 0%,
+		rgba(254, 243, 199, 0.5) 50%,
+		transparent 100%
+	);
+	pointer-events: none;
+	z-index: 0;
+}
+
+html.dark .form-panel-fade::before {
+	background: linear-gradient(
+		180deg,
+		rgba(28, 25, 23, 0.9) 0%,
+		rgba(41, 37, 36, 0.5) 50%,
+		transparent 100%
+	);
+}
+
+/* Hero typography */
+.hero-text {
+	font-family: 'Instrument Serif', Georgia, serif;
+	font-size: clamp(3rem, 8vw, 6rem);
+	line-height: 1;
+	letter-spacing: -0.02em;
+	font-weight: 400;
+}
+
+.section-title {
+	font-family: 'Instrument Serif', Georgia, serif;
+	font-size: clamp(1.5rem, 4vw, 2.5rem);
+	line-height: 1.2;
+	letter-spacing: -0.01em;
+}
+
+/* Subtle input styling - underline only */
+.input-minimal {
+	width: 100%;
+	height: 3rem;
+	padding: 0;
+	font-size: 1.125rem;
+	font-family: inherit;
+	background: transparent;
+	border: none;
+	border-bottom: 2px solid rgba(0, 0, 0, 0.1);
+	color: inherit;
+	transition: border-color 0.2s ease;
+}
+
+html.dark .input-minimal {
+	border-bottom-color: rgba(255, 255, 255, 0.15);
+}
+
+.input-minimal:focus {
+	outline: none;
+	border-bottom-color: var(--accent);
+}
+
+.input-minimal::placeholder {
+	color: rgba(0, 0, 0, 0.35);
+}
+
+html.dark .input-minimal::placeholder {
+	color: rgba(255, 255, 255, 0.35);
+}
+
+/* Label styling */
+.label-minimal {
+	display: block;
+	font-size: 0.7rem;
+	font-weight: 600;
+	letter-spacing: 0.1em;
+	text-transform: uppercase;
+	color: rgba(0, 0, 0, 0.45);
+	margin-bottom: 0.25rem;
+}
+
+html.dark .label-minimal {
+	color: rgba(255, 255, 255, 0.45);
+}
+
+/* Button styles */
+.btn-primary {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 3rem;
+	padding: 0 2rem;
+	font-size: 0.9375rem;
+	font-weight: 600;
+	letter-spacing: 0.02em;
+	background: var(--accent);
+	color: white;
+	border: none;
+	cursor: pointer;
+	transition: background 0.2s ease, transform 0.15s ease;
+}
+
+.btn-primary:hover {
+	background: var(--accent-dark);
+}
+
+.btn-primary:active {
+	transform: scale(0.98);
+}
+
+.btn-primary:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.btn-ghost {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 3rem;
+	padding: 0 1.5rem;
+	font-size: 0.9375rem;
+	font-weight: 500;
+	background: transparent;
+	color: inherit;
+	border: none;
+	cursor: pointer;
+	opacity: 0.6;
+	transition: opacity 0.2s ease;
+}
+
+.btn-ghost:hover {
+	opacity: 1;
+}

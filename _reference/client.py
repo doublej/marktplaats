@@ -1,0 +1,618 @@
+import asyncio
+import contextlib
+import logging
+import re
+from datetime import datetime, timedelta
+from typing import Any
+from urllib.parse import quote_plus, urlencode
+
+import httpx
+from bs4 import BeautifulSoup
+from fake_useragent import UserAgent
+from pydantic import BaseModel, HttpUrl, ValidationError
+
+from .price_utils import clean_and_parse_price
+from .text_utils import clean_description, clean_text, clean_title
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+class ListingItem(BaseModel):
+    source_listing_id: str
+    title: str
+    price: str
+    price_numeric: int | None = None  # Price in cents for sorting/filtering
+    url: HttpUrl
+    description_snippet: str | None = None
+    image_url: HttpUrl | None = None
+    raw_html: str | None = None
+
+    # Additional listing metadata
+    location: str | None = None
+    seller: str | None = None
+    views: int | None = None
+    condition: str | None = None
+    date_posted: datetime | None = None
+
+
+class MarktplaatsScrapingError(Exception):
+    """Custom exception for scraping-related errors."""
+
+    pass
+
+
+class MarktplaatsScraper:
+    """Real Marktplaats.nl web scraper."""
+
+    BASE_URL = "https://www.marktplaats.nl"
+    SEARCH_URL = "https://www.marktplaats.nl/q/{query}/"
+
+    def __init__(self) -> None:
+        self.ua = UserAgent()
+        self.session: httpx.AsyncClient | None = None
+
+    async def __aenter__(self) -> "MarktplaatsScraper":
+        """Async context manager entry."""
+        self.session = httpx.AsyncClient(
+            timeout=30.0,
+            headers={
+                "User-Agent": self.ua.random,
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "nl-NL,nl;q=0.9,en;q=0.8",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "none",
+            },
+        )
+        return self
+
+    async def __aexit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        """Async context manager exit."""
+        if self.session:
+            await self.session.aclose()
+
+    def _build_search_url(
+        self,
+        query: str,
+        zip_code: str | None = None,
+        distance: int | None = None,
+        price_from: int | None = None,
+        price_to: int | None = None,
+        sort_by: str | None = None,
+        sort_order: str | None = None,
+    ) -> str:
+        """Build the search URL with parameters."""
+        # Ensure query is lowercase to avoid Marktplaats redirects
+        query = query.lower()
+        encoded_query = quote_plus(query)
+        url = self.SEARCH_URL.format(query=encoded_query)
+
+        params = {}
+
+        if zip_code:
+            params["postcode"] = zip_code
+        if distance:
+            params["distanceMeters"] = str(distance * 1000)  # Convert km to meters
+        if price_from:
+            params["PriceCentsFrom"] = str(price_from * 100)  # Convert euros to cents
+        if price_to:
+            params["PriceCentsTo"] = str(price_to * 100)  # Convert euros to cents
+        if sort_by == "price" and sort_order == "asc":
+            params["sortBy"] = "PRICE"
+            params["sortOrder"] = "INCREASING"
+        elif sort_by == "price" and sort_order == "desc":
+            params["sortBy"] = "PRICE"
+            params["sortOrder"] = "DECREASING"
+        elif sort_by == "date":
+            params["sortBy"] = "DATE"
+
+        if params:
+            url += "?" + urlencode(params)
+
+        return url
+
+    def _extract_listing_id(self, url: str) -> str | None:
+        """Extract listing ID from Marktplaats URL."""
+        # Pattern: /m1234567890-title-here/
+        match = re.search(r"/m(\d+)-", url)
+        if match:
+            return f"m{match.group(1)}"
+        return None
+
+    def _clean_price(self, price_text: str) -> tuple[str, int | None]:
+        """Clean and normalize price text using shared price utilities."""
+        return clean_and_parse_price(price_text)
+
+    def _parse_listings(self, html: str) -> list[ListingItem]:
+        """Parse listings from HTML content."""
+        soup = BeautifulSoup(html, "lxml")
+        listings = []
+        listing_containers: list[Any] = []
+
+        # Try to find listings in different ways
+
+        # Method 1: Look for specific listing containers
+        method1_containers = soup.find_all(
+            "div", class_=re.compile(r"hz-Listing-item-wrapper", re.I)
+        )
+        if method1_containers:
+            listing_containers = list(method1_containers)
+
+        if not listing_containers:
+            # Method 2: Look for elements with listing content
+            method2_containers = soup.find_all(
+                "div", class_=re.compile(r"hz-Listing-listview-content", re.I)
+            )
+            if method2_containers:
+                listing_containers = list(method2_containers)
+
+        if not listing_containers:
+            # Method 3: Find parent containers of listing links
+            listing_links = soup.find_all("a", href=re.compile(r"/m\d+"))
+            for link in listing_links:
+                # Find parent container that likely contains all listing info
+                parent = link.find_parent("div", class_=re.compile(r"hz-Listing", re.I))
+                if parent and parent not in listing_containers:
+                    listing_containers.append(parent)
+                elif not parent:
+                    # Use the link itself as container
+                    listing_containers.append(link)
+
+        logger.info(f"Found {len(listing_containers)} potential listing containers")
+
+        for container in listing_containers[:50]:  # Limit to prevent excessive parsing
+            if not hasattr(container, "find") or not hasattr(container, "get"):
+                logger.debug("Invalid container type, skipping")
+                continue
+
+            listing = self._parse_single_listing(container)
+            if listing:
+                listings.append(listing)
+
+        return listings
+
+    def _parse_single_listing(self, container: Any) -> ListingItem | None:
+        """Parse a single listing from its container element."""
+        # Find URL first (most reliable identifier)
+        link_elem = None
+        if container.name == "a" and re.search(r"/m\d+", container.get("href", "")):
+            link_elem = container
+        else:
+            link_elem = container.find("a", href=re.compile(r"/m\d+"))
+
+        if not link_elem:
+            return None
+
+        href = link_elem.get("href", "")
+        url = self.BASE_URL + href if href.startswith("/") else href
+
+        # Extract listing ID
+        listing_id = self._extract_listing_id(url)
+        if not listing_id:
+            return None
+
+        # Find title - could be in the link text or separate element
+        title = None
+
+        # Try link text first
+        link_text = clean_text(link_elem.get_text())
+        if link_text and len(link_text) > 5:
+            title = link_text
+
+        # If no good title from link, look for title elements
+        if not title:
+            title_elem = (
+                container.find(["h1", "h2", "h3"], class_=re.compile(r"title", re.I))
+                or container.find(["h1", "h2", "h3"])
+                or container.find(class_=re.compile(r"hz-Listing-title", re.I))
+            )
+            if title_elem:
+                title = clean_text(title_elem.get_text())
+
+        if not title:
+            return None
+
+        # Clean title using comprehensive text utils
+        title = clean_title(title)
+        if not title or len(title) < 3:
+            return None
+
+        # Find price
+        price = "Price on request"
+        price_numeric = None
+
+        # Look for price in various ways
+        price_patterns = [r"€\s*[\d.,]+(?:\s*,-)?", r"euro\s*[\d.,]+", r"[\d.,]+\s*euro"]
+
+        # Try to find price in the text content
+        all_text = container.get_text()
+        for pattern in price_patterns:
+            match = re.search(pattern, all_text, re.I)
+            if match:
+                price, price_numeric = self._clean_price(match.group())
+                break
+
+        # Also look for price elements
+        if price == "Price on request":
+            price_elem = (
+                container.find(class_=re.compile(r"price", re.I))
+                or container.find("span", string=re.compile(r"€", re.I))
+                or container.find("div", string=re.compile(r"€", re.I))
+            )
+            if price_elem:
+                price, price_numeric = self._clean_price(price_elem.get_text())
+
+        # Find description - look for text that's not title or price
+        description = None
+        desc_candidates = [
+            container.find(class_=re.compile(r"description|snippet", re.I)),
+            container.find("p"),
+        ]
+
+        for candidate in desc_candidates:
+            if candidate:
+                desc_text = clean_description(candidate.get_text())
+                if desc_text and desc_text != title and len(desc_text) > 10:
+                    description = desc_text[:200]  # Limit length
+                    break
+
+        # Find image
+        image_url = None
+        img_elem = container.find("img")
+        if img_elem:
+            img_src = (
+                img_elem.get("src") or img_elem.get("data-src") or img_elem.get("data-lazy-src")
+            )
+            if img_src:
+                if img_src.startswith("//"):
+                    img_src = "https:" + img_src
+                elif img_src.startswith("/"):
+                    img_src = self.BASE_URL + img_src
+                elif img_src.startswith("data:") or not img_src.startswith("http"):
+                    img_src = None
+
+                if img_src:
+                    with contextlib.suppress(ValidationError):
+                        image_url = HttpUrl(img_src)
+
+        # Extract additional metadata
+        # Extract location
+        location = None
+        all_text = container.get_text()
+        for location_elem in container.find_all(text=True):
+            if location_elem and any(
+                word in location_elem.lower() for word in ["op ", "km", "plaats"]
+            ):
+                location_text = clean_text(location_elem.strip())
+                if location_text and len(location_text) < 50:
+                    location = location_text
+                    break
+
+        # Extract seller info
+        seller = None
+        seller_patterns = [r"verkoper", r"aanbieder", r"particulier", r"handel"]
+        for pattern in seller_patterns:
+            seller_match = re.search(f"{pattern}[:\\s]*([^\\n\\r,]+)", all_text, re.I)
+            if seller_match:
+                cleaned_seller = clean_text(seller_match.group(1))
+                if cleaned_seller:
+                    seller = cleaned_seller[:50]
+                break
+
+        # Extract views
+        views = None
+        views_match = re.search(r"(\d+)\s*(?:keer\s*)?bekeken", all_text, re.I)
+        if views_match:
+            try:
+                views = int(views_match.group(1))
+            except ValueError:
+                views = None
+
+        # Extract condition
+        condition = None
+        condition_patterns = [
+            r"nieuw",
+            r"gebruikt",
+            r"zo goed als nieuw",
+            r"redelijke staat",
+            r"matige staat",
+        ]
+        for pattern in condition_patterns:
+            if re.search(pattern, all_text, re.I):
+                condition = pattern.title()
+                break
+
+        # Extract post date - look for date patterns
+        date_posted = None
+        date_patterns = [
+            # Dutch month names pattern
+            r"(\d{1,2})\s*(jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec)\s*(\d{4})",
+            # Numeric date patterns
+            r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})",
+            r"(\d{4})-(\d{1,2})-(\d{1,2})",
+            # Relative time patterns
+            r"gisteren|vandaag|(?:\d+\s*(?:uur|dag|dagen|week|weken|maand|maanden)(?:en)?\s*geleden)",
+        ]
+
+        for pattern in date_patterns:
+            date_match = re.search(pattern, all_text, re.I)
+            if date_match:
+                date_text = date_match.group(0).lower()
+
+                try:
+                    # Handle relative dates
+                    if "vandaag" in date_text:
+                        date_posted = datetime.now().replace(
+                            hour=12, minute=0, second=0, microsecond=0
+                        )
+                    elif "gisteren" in date_text:
+                        date_posted = (datetime.now() - timedelta(days=1)).replace(
+                            hour=12, minute=0, second=0, microsecond=0
+                        )
+                    elif "geleden" in date_text:
+                        # Extract number and time unit
+                        time_match = re.search(
+                            r"(\d+)\s*(uur|dag|dagen|week|weken|maand|maanden)", date_text
+                        )
+                        if time_match:
+                            number = int(time_match.group(1))
+                            unit = time_match.group(2)
+
+                            if "uur" in unit:
+                                date_posted = datetime.now() - timedelta(hours=number)
+                            elif "dag" in unit:
+                                date_posted = datetime.now() - timedelta(days=number)
+                            elif "week" in unit:
+                                date_posted = datetime.now() - timedelta(weeks=number)
+                            elif "maand" in unit:
+                                date_posted = datetime.now() - timedelta(
+                                    days=number * 30
+                                )  # Approximate
+
+                            if date_posted:
+                                date_posted = date_posted.replace(
+                                    hour=12, minute=0, second=0, microsecond=0
+                                )
+
+                    # Handle Dutch month names
+                    elif re.match(
+                        r"(\d{1,2})\s*(jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec)\s*(\d{4})",
+                        date_text,
+                    ):
+                        month_map = {
+                            "jan": 1,
+                            "feb": 2,
+                            "mrt": 3,
+                            "apr": 4,
+                            "mei": 5,
+                            "jun": 6,
+                            "jul": 7,
+                            "aug": 8,
+                            "sep": 9,
+                            "okt": 10,
+                            "nov": 11,
+                            "dec": 12,
+                        }
+                        match = re.match(
+                            r"(\d{1,2})\s*(jan|feb|mrt|apr|mei|jun|jul|aug|sep|okt|nov|dec)\s*(\d{4})",
+                            date_text,
+                        )
+                        if match:
+                            day_str, month_str, year_str = match.groups()
+                            month = month_map.get(month_str.lower())
+                            if month:
+                                date_posted = datetime(int(year_str), month, int(day_str), 12, 0, 0)
+
+                    # Handle numeric date patterns
+                    elif re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", date_text):
+                        match = re.match(r"(\d{1,2})[/-](\d{1,2})[/-](\d{4})", date_text)
+                        if match:
+                            day_str, month_str, year_str = match.groups()
+                            date_posted = datetime(
+                                int(year_str), int(month_str), int(day_str), 12, 0, 0
+                            )
+
+                    elif re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", date_text):
+                        match = re.match(r"(\d{4})-(\d{1,2})-(\d{1,2})", date_text)
+                        if match:
+                            year_str, month_str, day_str = match.groups()
+                            date_posted = datetime(
+                                int(year_str), int(month_str), int(day_str), 12, 0, 0
+                            )
+
+                except (ValueError, OverflowError) as e:
+                    logger.debug(f"Failed to parse date '{date_text}': {e}")
+                    date_posted = None
+
+                if date_posted:
+                    break
+
+        try:
+            return ListingItem(
+                source_listing_id=listing_id,
+                title=title,
+                price=price,
+                price_numeric=price_numeric,
+                url=HttpUrl(url),
+                description_snippet=description,
+                image_url=image_url,
+                raw_html=str(container),
+                # Additional metadata
+                location=location,
+                seller=seller,
+                views=views,
+                condition=condition,
+                date_posted=date_posted,
+            )
+        except ValidationError as e:
+            logger.debug(f"Validation error for listing {listing_id}: {e}")
+            return None
+
+
+async def fetch_listings_legacy(
+    query: str,
+    zip_code: str | None = None,
+    distance: int | None = None,
+    price_from: int | None = None,
+    price_to: int | None = None,
+    limit: int = 10,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
+) -> list[ListingItem]:
+    """
+    Fetch real listings from Marktplaats.nl.
+
+    Args:
+        query: Search query string
+        zip_code: Dutch postal code (e.g., "1012AB")
+        distance: Search radius in kilometers
+        price_from: Minimum price in euros
+        price_to: Maximum price in euros
+        limit: Maximum number of listings to return
+        sort_by: Sort criteria ("price", "date", "relevance")
+        sort_order: Sort order ("asc", "desc")
+
+    Returns:
+        List of ListingItem objects
+
+    Raises:
+        MarktplaatsScrapingError: If scraping fails
+    """
+    logger.info(
+        f"Fetching listings: query='{query}', zip='{zip_code}', "
+        f"distance={distance}km, price={price_from}-{price_to}, limit={limit}"
+    )
+
+    try:
+        async with MarktplaatsScraper() as scraper:
+            # Build search URL
+            search_url = scraper._build_search_url(
+                query=query,
+                zip_code=zip_code,
+                distance=distance,
+                price_from=price_from,
+                price_to=price_to,
+                sort_by=sort_by,
+                sort_order=sort_order,
+            )
+
+            logger.info(f"Requesting URL: {search_url}")
+
+            # Add rate limiting delay
+            await asyncio.sleep(1.0)
+
+            # Fetch the search results page with redirect handling
+            if not scraper.session:
+                raise MarktplaatsScrapingError("Session not initialized")
+            response = await scraper.session.get(search_url, follow_redirects=True)
+            response.raise_for_status()
+
+            # Check for blocking or rate limiting
+            if response.status_code == 429:
+                raise MarktplaatsScrapingError("Rate limited by Marktplaats")
+
+            if "blocked" in response.text.lower() or "captcha" in response.text.lower():
+                raise MarktplaatsScrapingError("Blocked by anti-scraping measures")
+
+            # Parse listings from HTML
+            listings = scraper._parse_listings(response.text)
+
+            # Apply limit
+            if limit:
+                listings = listings[:limit]
+
+            logger.info(f"Successfully scraped {len(listings)} listings for query '{query}'")
+            return listings
+
+    except httpx.HTTPError as e:
+        logger.error(f"HTTP error while fetching listings: {e}")
+        raise MarktplaatsScrapingError(f"Network error: {e}") from e
+    except (ValueError, AttributeError, KeyError) as e:
+        logger.error(f"Data parsing error while fetching listings: {e}")
+        raise MarktplaatsScrapingError(f"Data parsing failed: {e}") from e
+
+
+# Import and use the new provider system
+async def fetch_listings(
+    query: str,
+    zip_code: str | None = None,
+    distance: int | None = None,
+    price_from: int | None = None,
+    price_to: int | None = None,
+    limit: int = 10,
+    sort_by: str | None = None,
+    sort_order: str | None = None,
+) -> list[ListingItem]:
+    """
+    Fetch listings using the provider abstraction system with fallback support.
+
+    This function maintains backward compatibility while providing enterprise-grade
+    reliability through the provider manager system.
+
+    Args:
+        query: Search query string
+        zip_code: Dutch postal code (e.g., "1012AB")
+        distance: Search radius in kilometers
+        price_from: Minimum price in euros
+        price_to: Maximum price in euros
+        limit: Maximum number of listings to return
+        sort_by: Sort criteria ("price", "date", "relevance")
+        sort_order: Sort order ("asc", "desc")
+
+    Returns:
+        List of ListingItem objects
+
+    Raises:
+        Exception: If all providers fail
+    """
+    try:
+        # Use the provider system
+        from .providers import fetch_listings_with_providers
+
+        return await fetch_listings_with_providers(
+            query=query,
+            zip_code=zip_code,
+            distance=distance,
+            price_from=price_from,
+            price_to=price_to,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    except ImportError:
+        # Fallback to legacy implementation if provider system not available
+        logger.warning("Provider system not available, using legacy scraper")
+        return await fetch_listings_legacy(
+            query=query,
+            zip_code=zip_code,
+            distance=distance,
+            price_from=price_from,
+            price_to=price_to,
+            limit=limit,
+            sort_by=sort_by,
+            sort_order=sort_order,
+        )
+    except (MarktplaatsScrapingError, httpx.HTTPError, ValueError) as e:
+        # If provider system fails, try legacy as fallback
+        logger.warning(f"Provider system failed ({e}), attempting legacy fallback")
+        try:
+            return await fetch_listings_legacy(
+                query=query,
+                zip_code=zip_code,
+                distance=distance,
+                price_from=price_from,
+                price_to=price_to,
+                limit=limit,
+                sort_by=sort_by,
+                sort_order=sort_order,
+            )
+        except (MarktplaatsScrapingError, httpx.HTTPError, ValueError) as fallback_error:
+            logger.error(f"Both provider system and legacy fallback failed: {fallback_error}")
+            raise MarktplaatsScrapingError(
+                f"All listing retrieval methods failed: {e}"
+            ) from fallback_error

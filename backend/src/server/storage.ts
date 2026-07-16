@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
-import type { Storage, WatchConfig, WatchState } from "./types.js";
+import type { MpAccount, Storage, WatchConfig, WatchState } from "./types.js";
 import { StorageSchema } from "./types.js";
 
 function emptyStorage(): Storage {
-	return { version: 1, watches: [], states: {} };
+	return { version: 1, watches: [], states: {}, mpAccounts: [] };
 }
 
 export class StorageManager {
@@ -73,5 +73,34 @@ export class StorageManager {
 	saveState(state: WatchState): void {
 		this.data.states[state.watchId] = state;
 		this.save();
+	}
+
+	getMpAccounts(appUserId: string): MpAccount[] {
+		return this.data.mpAccounts.filter((a) => a.appUserId === appUserId);
+	}
+
+	getMpAccount(id: string, appUserId: string): MpAccount | undefined {
+		return this.data.mpAccounts.find((a) => a.id === id && a.appUserId === appUserId);
+	}
+
+	addMpAccount(account: MpAccount): void {
+		this.data.mpAccounts.push(account);
+		this.save();
+	}
+
+	updateMpAccount(id: string, updates: Partial<MpAccount>): MpAccount | undefined {
+		const idx = this.data.mpAccounts.findIndex((a) => a.id === id);
+		if (idx === -1) return undefined;
+		this.data.mpAccounts[idx] = { ...this.data.mpAccounts[idx], ...updates } as MpAccount;
+		this.save();
+		return this.data.mpAccounts[idx];
+	}
+
+	deleteMpAccount(id: string, appUserId: string): boolean {
+		const idx = this.data.mpAccounts.findIndex((a) => a.id === id && a.appUserId === appUserId);
+		if (idx === -1) return false;
+		this.data.mpAccounts.splice(idx, 1);
+		this.save();
+		return true;
 	}
 }

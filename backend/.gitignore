@@ -2,3 +2,20 @@ node_modules/
 dist/
 *.log
 .DS_Store
+
+# Local environment (contains MP_POSTER_KEY — session-decryption secret)
+.env
+.env.local
+
+# Poster storage — contains encrypted mp session blobs
+marktplaats-watches.json
+
+# Phase 0 recon artefacts — contain session cookies + raw request bodies
+src/poster/flow-raw.ndjson
+src/poster/flow-cookies.json
+
+# Recon/probe artefacts — screenshots + raw probe output
+listings/
+screenshots/
+syi-probe.html
+upload-probe-result.json

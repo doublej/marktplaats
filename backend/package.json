@@ -27,7 +27,8 @@
     "lint:fix": "bunx @biomejs/biome check --fix src/",
     "server": "bun run src/server/index.ts",
     "server:dev": "bun --watch src/server/index.ts",
-    "cli": "bun src/cli/index.ts"
+    "cli": "bun src/cli/index.ts",
+    "recon:syi": "bun scripts/recon-mp-syi.ts"
   },
   "dependencies": {
     "cheerio": "^1.0.0",
@@ -36,6 +37,7 @@
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
     "@types/bun": "^1.1.14",
+    "playwright": "^1.59.1",
     "typescript": "^5.7.2"
   },
   "keywords": [

@@ -1,4 +1,11 @@
 import { getProviderStatus } from "../index.js";
+import {
+	handleCreateAd,
+	handleCreateMpAccount,
+	handleDeleteMpAccount,
+	handleListMpAccounts,
+	handleUpdateMpAccount,
+} from "./mp-routes.js";
 import { openApiSpec } from "./openapi.js";
 import type { Scheduler } from "./scheduler.js";
 import type { StorageManager } from "./storage.js";
@@ -74,6 +81,9 @@ const routes: Record<string, RouteHandler> = {
 	"GET /status": () => json({ ok: true, provider: getProviderStatus() }),
 	"GET /watches": (_, storage) => json(storage.getWatches()),
 	"POST /watches": (req, storage) => handleCreateWatch(req, storage),
+	"GET /mp-accounts": (req, storage) => handleListMpAccounts(req, storage),
+	"POST /mp-accounts": (req, storage) => handleCreateMpAccount(req, storage),
+	"POST /ads": (req, storage) => handleCreateAd(req, storage),
 	"GET /openapi.json": () => json(openApiSpec),
 	"GET /docs": () => new Response(swaggerHtml, { headers: { "Content-Type": "text/html" } }),
 };
@@ -125,6 +135,12 @@ export function createServer(config: ServerConfig, storage: StorageManager, sche
 					storage,
 					scheduler,
 				);
+
+			const mpMatch = /^\/mp-accounts\/([^/]+)$/.exec(pathname);
+			if (mpMatch?.[1]) {
+				if (req.method === "DELETE") return handleDeleteMpAccount(req, mpMatch[1], storage);
+				if (req.method === "PATCH") return handleUpdateMpAccount(req, mpMatch[1], storage);
+			}
 
 			return json({ error: "Not found" }, 404);
 		},

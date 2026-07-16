@@ -57,10 +57,26 @@ export const WatchStateSchema = z.object({
 
 export type WatchState = z.infer<typeof WatchStateSchema>;
 
+export const MpAccountSchema = z.object({
+	id: z.string().uuid(),
+	appUserId: z.string(),
+	label: z.string().min(1),
+	mpUserId: z.string(),
+	nickname: z.string().nullable(),
+	email: z.string().nullable(),
+	postCode: z.string().nullable(),
+	encryptedStorageState: z.string(),
+	linkedAt: z.string().datetime(),
+	lastUsedAt: z.string().datetime().nullable(),
+});
+
+export type MpAccount = z.infer<typeof MpAccountSchema>;
+
 export const StorageSchema = z.object({
 	version: z.literal(1),
 	watches: z.array(WatchConfigSchema),
 	states: z.record(z.string(), WatchStateSchema),
+	mpAccounts: z.array(MpAccountSchema).default([]),
 });
 
 export type Storage = z.infer<typeof StorageSchema>;

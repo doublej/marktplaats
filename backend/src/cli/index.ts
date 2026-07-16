@@ -1,5 +1,6 @@
 #!/usr/bin/env bun
 import { runCategories, runDetail, runSearch, runSeller, runStatus } from "./commands.js";
+import { runMpAccounts, runMpCreateAd, runMpLink, runMpUpdateAccount } from "./mp.js";
 import { type Ctx, createOutput, jsonError, parseFlags } from "./output.js";
 import { runPrime } from "./prime.js";
 import { runWatchCreate, runWatchDelete, runWatchPoll, runWatches } from "./watches.js";
@@ -48,6 +49,10 @@ const commands: Record<string, (ctx: Ctx) => Promise<void>> = {
 	"watch:create": runWatchCreate,
 	"watch:poll": runWatchPoll,
 	"watch:delete": runWatchDelete,
+	"mp:link": runMpLink,
+	"mp:accounts": runMpAccounts,
+	"mp:update-account": runMpUpdateAccount,
+	"mp:create-ad": runMpCreateAd,
 	status: runStatus,
 	help: showHelp,
 };
@@ -104,6 +109,10 @@ async function showHelp(ctx: Ctx): Promise<void> {
 			["`watch:create`", "Create watch"],
 			["`watch:poll <id>`", "Poll watch now"],
 			["`watch:delete <id>`", "Remove watch"],
+			["`mp:link`", "Link a marktplaats account (headed browser)"],
+			["`mp:accounts`", "List linked mp accounts"],
+			["`mp:update-account`", "Update nickname/postcode/email on a linked account"],
+			["`mp:create-ad`", "Submit a new ad via a linked account"],
 			["`status`", "Provider health"],
 		],
 	);

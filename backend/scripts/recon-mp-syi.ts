@@ -1,0 +1,352 @@
+#!/usr/bin/env bun
+/**
+ * Phase 0 recon: launch headed Chromium, let user log in + walk SYI flow
+ * manually, record every XHR/fetch against marktplaats.nl to
+ * ndjson + summarise to FLOW.md.
+ *
+ * Run:   bun run backend/scripts/recon-mp-syi.ts
+ * Stop:  close the browser window (or Ctrl-C).
+ *
+ * Writes incrementally — safe against Ctrl-C and crashes.
+ */
+
+import { appendFileSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { chromium, type BrowserContext, type Cookie } from "playwright";
+
+const POSTER_DIR = join(import.meta.dir, "..", "src", "poster");
+const RAW_NDJSON = join(POSTER_DIR, "flow-raw.ndjson");
+const COOKIES_JSON = join(POSTER_DIR, "flow-cookies.json");
+const FLOW_MD = join(POSTER_DIR, "FLOW.md");
+
+const MP_HOSTS = [/(^|\.)marktplaats\.nl$/];
+
+type CaptureEntry = {
+	ts: number;
+	phase: "request" | "response";
+	method: string;
+	url: string;
+	resourceType: string;
+	status?: number;
+	reqHeaders?: Record<string, string>;
+	resHeaders?: Record<string, string>;
+	reqBody?: string;
+	resBodySnippet?: string;
+	resContentType?: string;
+};
+
+const capture: CaptureEntry[] = [];
+
+mkdirSync(POSTER_DIR, { recursive: true });
+// Truncate ndjson at start so reruns don't accumulate.
+writeFileSync(RAW_NDJSON, "");
+writeFileSync(FLOW_MD, "# Marktplaats SYI Flow — Phase 0 Recon\n\n_Recon in progress…_\n");
+
+function appendEntry(entry: CaptureEntry): void {
+	capture.push(entry);
+	try {
+		appendFileSync(RAW_NDJSON, `${JSON.stringify(entry)}\n`);
+	} catch (err) {
+		console.error("ndjson append failed:", err);
+	}
+}
+
+function redact(value: string): string {
+	return value
+		.replace(/([a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,})/gi, "<REDACTED_EMAIL>")
+		.replace(/\b(?:\+?\d{1,3}[- ]?)?(?:\d[ -]?){9,12}\b/g, (m) =>
+			m.length >= 9 ? "<REDACTED_PHONE>" : m,
+		)
+		.replace(/\b\d{13,19}\b/g, "<REDACTED_NUMBER>");
+}
+
+function redactHeaders(headers: Record<string, string>): Record<string, string> {
+	const out: Record<string, string> = {};
+	const dropKeys = new Set(["cookie", "set-cookie", "authorization", "x-auth-token"]);
+	for (const [k, v] of Object.entries(headers)) {
+		const key = k.toLowerCase();
+		if (dropKeys.has(key)) {
+			out[key] = "<REDACTED>";
+			continue;
+		}
+		out[key] = v.length > 512 ? `${v.slice(0, 512)}…` : v;
+	}
+	return out;
+}
+
+function isMpUrl(url: string): boolean {
+	try {
+		const host = new URL(url).hostname;
+		return MP_HOSTS.some((re) => re.test(host));
+	} catch {
+		return false;
+	}
+}
+
+function summariseEndpoints(entries: CaptureEntry[]): string {
+	const mutating = entries.filter(
+		(e) => e.phase === "request" && ["POST", "PUT", "PATCH", "DELETE"].includes(e.method),
+	);
+
+	const byKey = new Map<string, CaptureEntry[]>();
+	for (const e of mutating) {
+		const key = `${e.method} ${(() => {
+			try {
+				return new URL(e.url).pathname;
+			} catch {
+				return e.url;
+			}
+		})()}`;
+		const list = byKey.get(key) ?? [];
+		list.push(e);
+		byKey.set(key, list);
+	}
+
+	const lines: string[] = [];
+	for (const [key, list] of byKey) {
+		lines.push(`### ${key}`);
+		lines.push("");
+		lines.push(`Occurrences: ${list.length}`);
+		const first = list[0];
+		if (!first) continue;
+		if (first.reqHeaders) {
+			const xHeaders = Object.entries(first.reqHeaders).filter(([k]) => k.startsWith("x-"));
+			if (xHeaders.length > 0) {
+				lines.push("");
+				lines.push("Custom headers:");
+				lines.push("```");
+				for (const [k, v] of xHeaders) lines.push(`${k}: ${v}`);
+				lines.push("```");
+			}
+		}
+		if (first.reqBody) {
+			lines.push("");
+			lines.push("Sample request body (redacted):");
+			lines.push("```");
+			lines.push(redact(first.reqBody).slice(0, 2000));
+			lines.push("```");
+		}
+		const resp = entries.find(
+			(e) => e.phase === "response" && e.url === first.url && e.method === first.method,
+		);
+		if (resp?.resBodySnippet) {
+			lines.push("");
+			lines.push(`Response ${resp.status} ${resp.resContentType ?? ""}:`);
+			lines.push("```");
+			lines.push(redact(resp.resBodySnippet).slice(0, 1000));
+			lines.push("```");
+		}
+		lines.push("");
+	}
+	return lines.join("\n");
+}
+
+function renderFlowMd(entries: CaptureEntry[], cookies: Cookie[]): string {
+	const mpCookies = cookies.filter((c) =>
+		MP_HOSTS.some((re) => re.test(c.domain.replace(/^\./, ""))),
+	);
+	const cookieNames = mpCookies.map(
+		(c) => `- \`${c.name}\` — domain=${c.domain}, httpOnly=${c.httpOnly}, secure=${c.secure}`,
+	);
+
+	const reqRows = entries
+		.filter((e) => e.phase === "request")
+		.slice(0, 120)
+		.map((e, i) => {
+			const resp = entries.find(
+				(r) => r.phase === "response" && r.url === e.url && r.method === e.method,
+			);
+			const path = (() => {
+				try {
+					return new URL(e.url).pathname;
+				} catch {
+					return e.url;
+				}
+			})();
+			return `| ${i + 1} | ${e.method} | \`${path}\` | ${resp?.status ?? "—"} | ${resp?.resContentType?.split(";")[0] ?? "—"} |`;
+		})
+		.join("\n");
+
+	return `# Marktplaats SYI Flow — Phase 0 Recon
+
+Captured: ${new Date().toISOString()}
+
+> Generated by \`backend/scripts/recon-mp-syi.ts\`. Source of truth for the poster module's HTTP surface. Secrets redacted.
+
+## Session cookies observed
+
+${cookieNames.length === 0 ? "_None captured yet._" : cookieNames.join("\n")}
+
+Cookie jar dump: \`flow-cookies.json\` (gitignored).
+
+## Mutating endpoints (POST/PUT/PATCH/DELETE)
+
+${summariseEndpoints(entries) || "_None captured yet. Walk the flow in the browser window._"}
+
+## All requests (first 120)
+
+| # | Method | Path | Status | Content-Type |
+|---|--------|------|--------|--------------|
+${reqRows || "| — | — | — | — | — |"}
+
+## Raw capture
+
+Full ndjson: \`flow-raw.ndjson\` (gitignored — contains raw request bodies).
+
+## Analysis checklist (hand-edit after capture)
+
+- [ ] Login POST endpoint + payload shape
+- [ ] Post-login cookies (which are the session cookies to store?)
+- [ ] Category selection endpoint (SYI step 1)
+- [ ] Draft creation endpoint (SYI step 2)
+- [ ] Final submit endpoint + minimum payload (title/desc/price/category)
+- [ ] CSRF/XSRF token mechanism (header or hidden form field?)
+- [ ] Captcha / 2FA gate encountered? (yes/no)
+- [ ] Final ad ID location in response
+`;
+}
+
+async function snapshot(context: BrowserContext): Promise<void> {
+	let cookies: Cookie[] = [];
+	try {
+		cookies = await context.cookies();
+	} catch {
+		/* context may be closing */
+	}
+	try {
+		writeFileSync(COOKIES_JSON, JSON.stringify(cookies, null, 2));
+	} catch (err) {
+		console.error("cookies write failed:", err);
+	}
+	try {
+		writeFileSync(FLOW_MD, renderFlowMd(capture, cookies));
+	} catch (err) {
+		console.error("FLOW.md write failed:", err);
+	}
+}
+
+async function main(): Promise<void> {
+	console.log("Launching Chromium (headed)…");
+	const browser = await chromium.launch({
+		headless: false,
+		args: ["--disable-blink-features=AutomationControlled"],
+	});
+	const context = await browser.newContext({
+		locale: "nl-NL",
+		viewport: { width: 1280, height: 900 },
+	});
+
+	context.on("request", (req) => {
+		if (!isMpUrl(req.url())) return;
+		void (async () => {
+			try {
+				appendEntry({
+					ts: Date.now(),
+					phase: "request",
+					method: req.method(),
+					url: req.url(),
+					resourceType: req.resourceType(),
+					reqHeaders: redactHeaders(await req.allHeaders()),
+					reqBody: req.postData() ?? undefined,
+				});
+			} catch {
+				/* ignore */
+			}
+		})();
+	});
+
+	context.on("response", (res) => {
+		const req = res.request();
+		if (!isMpUrl(req.url())) return;
+		void (async () => {
+			try {
+				const headers = await res.allHeaders();
+				const contentType = headers["content-type"] ?? "";
+				let snippet: string | undefined;
+				if (
+					contentType.includes("json") ||
+					contentType.includes("text") ||
+					contentType.includes("form-urlencoded")
+				) {
+					try {
+						const body = await res.text();
+						snippet = body.slice(0, 4096);
+					} catch {
+						/* streaming / binary */
+					}
+				}
+				appendEntry({
+					ts: Date.now(),
+					phase: "response",
+					method: req.method(),
+					url: req.url(),
+					resourceType: req.resourceType(),
+					status: res.status(),
+					resHeaders: redactHeaders(headers),
+					resContentType: contentType,
+					resBodySnippet: snippet,
+				});
+			} catch {
+				/* ignore */
+			}
+		})();
+	});
+
+	const page = await context.newPage();
+
+	// Re-snapshot on every full navigation — keeps FLOW.md + cookies fresh.
+	page.on("framenavigated", (frame) => {
+		if (frame === page.mainFrame()) void snapshot(context);
+	});
+
+	// Periodic flush as belt-and-braces.
+	const flushTimer = setInterval(() => {
+		void snapshot(context);
+	}, 3000);
+
+	await page.goto(
+		"https://www.marktplaats.nl/identity/v2/login?target=https%3A%2F%2Fwww.marktplaats.nl%2F",
+	);
+
+	console.log("");
+	console.log("  ┌────────────────────────────────────────────────────────────────┐");
+	console.log("  │  Phase 0 recon                                                 │");
+	console.log("  │                                                                │");
+	console.log("  │  1. Log in manually (handle any captcha/2FA yourself).         │");
+	console.log("  │  2. Click 'Plaats een advertentie' and walk the SYI flow.      │");
+	console.log("  │     Pick category → fill title/desc/price → submit.            │");
+	console.log("  │  3. Close the browser window when done.                        │");
+	console.log("  │                                                                │");
+	console.log("  │  Files updating continuously:                                  │");
+	console.log(`  │    ${RAW_NDJSON.replace(process.env.HOME ?? "", "~")}`);
+	console.log(`  │    ${FLOW_MD.replace(process.env.HOME ?? "", "~")}`);
+	console.log("  └────────────────────────────────────────────────────────────────┘");
+	console.log("");
+
+	const shutdown = async (reason: string): Promise<void> => {
+		console.log(`\nShutting down: ${reason}`);
+		clearInterval(flushTimer);
+		try {
+			await snapshot(context);
+		} catch {
+			/* ignore */
+		}
+		console.log(
+			`Captured ${capture.length} events across ${new Set(capture.map((e) => e.url)).size} URLs.`,
+		);
+		console.log(`FLOW.md: ${FLOW_MD}`);
+		try {
+			await browser.close();
+		} catch {
+			/* ignore */
+		}
+		process.exit(0);
+	};
+
+	browser.on("disconnected", () => void shutdown("browser disconnected"));
+	context.on("close", () => void shutdown("context closed"));
+	process.on("SIGINT", () => void shutdown("SIGINT"));
+	process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}
+
+void main();

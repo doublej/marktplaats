@@ -22,6 +22,19 @@ bun run preview   # run built app locally
 
 Copy `.env.example` → `.env` and fill in auth secrets before first run.
 
+## API token auth
+
+Besides OAuth sessions, `/api/*` accepts `Authorization: Bearer <MP_API_TOKEN>` for remote
+clients (e.g. the CLI). Set `MP_API_TOKEN` (generate: `openssl rand -hex 32`) and
+`MP_API_USER_ID` (log in at the site, then open `/api/me` to read your `userId`). Leaving
+`MP_API_TOKEN` unset disables bearer auth entirely.
+
+## Watch scheduler
+
+The deployed app polls enabled watches in the background via the library `Scheduler`
+(started once from `hooks.server.ts`, checks every minute, respects each watch's
+`intervalMinutes`). On by default; set `WATCH_SCHEDULER=0` (or `false`) to disable.
+
 ## Layout
 
 ```

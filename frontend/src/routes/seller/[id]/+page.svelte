@@ -6,7 +6,7 @@
 	import { onMount } from 'svelte';
 	import type { ListingItem } from '$lib/types';
 
-	const sellerId = $derived($page.params.id);
+	const sellerId = $derived($page.params.id ?? '');
 	const pageNum = $derived(parseInt($page.url.searchParams.get('page') ?? '1', 10));
 
 	let listings = $state<ListingItem[]>([]);

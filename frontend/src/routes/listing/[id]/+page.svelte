@@ -13,7 +13,7 @@
 
 	// Get URL from query params or cache
 	const listingUrl = $derived($page.url.searchParams.get('url'));
-	const listingId = $derived($page.params.id);
+	const listingId = $derived($page.params.id ?? '');
 
 	onMount(async () => {
 		// Try to get cached listing for display while loading

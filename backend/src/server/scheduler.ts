@@ -40,10 +40,16 @@ export class Scheduler {
 
 		try {
 			for (const watch of this.storage.getEnabledWatches()) {
-				const state = this.storage.getState(watch.id);
-				if (!shouldPoll(watch, state.lastPolledAt)) continue;
-				await this.pollWatch(watch);
+				try {
+					const state = this.storage.getState(watch.id);
+					if (!shouldPoll(watch, state.lastPolledAt)) continue;
+					await this.pollWatch(watch);
+				} catch (error) {
+					console.error(`[scheduler] poll failed for watch ${watch.id}:`, error);
+				}
 			}
+		} catch (error) {
+			console.error("[scheduler] tick failed:", error);
 		} finally {
 			this.polling = false;
 		}

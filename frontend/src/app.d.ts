@@ -6,7 +6,7 @@ declare global {
 			auth(): Promise<Session | null>;
 		}
 		interface PageData {
-			session: Session | null;
+			session?: Session | null;
 		}
 	}
 }

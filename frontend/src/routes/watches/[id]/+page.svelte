@@ -6,7 +6,7 @@
 	import { centsToEuros, formatEuros } from '$lib/types';
 	import { onMount } from 'svelte';
 
-	const id = $derived($page.params.id);
+	const id = $derived($page.params.id ?? '');
 
 	let watch = $state<WatchConfig | null>(null);
 	let watchState = $state<WatchState | null>(null);
@@ -143,7 +143,7 @@
 	function getPriceChange(listing: TrackedListing): { change: number; isDropped: boolean } | null {
 		if (listing.priceHistory.length < 2) return null;
 		const first = listing.priceHistory[0].priceCents;
-		const last = listing.priceHistory.at(-1)?.priceCents;
+		const last = listing.priceHistory.at(-1)?.priceCents ?? null;
 		if (first === null || last === null) return null;
 		return { change: last - first, isDropped: last < first };
 	}

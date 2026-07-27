@@ -387,7 +387,7 @@ function parseNextDataListing(l: Record<string, unknown>): ListingItem | null {
 		condition: null,
 		datePosted: null,
 		rawHtml: null,
-		status: "active",
+		status: l.reserved === true ? "reserved" : "active",
 	};
 }
 

@@ -5,7 +5,8 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "marktplaats": "./src/cli/index.ts"
+    "marktplaats": "./src/cli/index.ts",
+    "marktplaats-mcp": "./src/mcp/index.ts"
   },
   "types": "dist/index.d.ts",
   "exports": {
@@ -16,6 +17,14 @@
     "./server": {
       "import": "./src/server/exports.ts",
       "types": "./src/server/exports.ts"
+    },
+    "./ops": {
+      "import": "./src/ops/index.ts",
+      "types": "./src/ops/index.ts"
+    },
+    "./mcp": {
+      "import": "./src/mcp/server.ts",
+      "types": "./src/mcp/server.ts"
     }
   },
   "scripts": {
@@ -28,6 +37,8 @@
     "server": "bun run src/server/index.ts",
     "server:dev": "bun --watch src/server/index.ts",
     "cli": "bun src/cli/index.ts",
+    "mcp": "bun src/mcp/index.ts",
+    "mcp:dev": "bun --watch src/mcp/index.ts",
     "recon:syi": "bun scripts/recon-mp-syi.ts"
   },
   "dependencies": {

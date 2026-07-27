@@ -1,6 +1,6 @@
 # marktplaats-js
 
-TypeScript scraper library for [marktplaats.nl](https://www.marktplaats.nl), plus a watch/notification server and CLI. Runtime: Bun.
+TypeScript scraper library for [marktplaats.nl](https://www.marktplaats.nl), plus a watch/notification server, a CLI, and an MCP server. Runtime: Bun.
 
 ## Install (workspace-local)
 
@@ -101,10 +101,83 @@ Modules:
 ## CLI
 
 ```bash
-bun run cli -- search "iphone"
-bun run cli -- prime        # warm caches
-bun run cli -- watches list
+bun run cli -- prime                    # project overview (default command)
+bun run cli -- search "iphone" --limit 5
+bun run cli -- watches
 ```
+
+Every command takes `--json` for machine-readable output. `--quiet`, `--no-color`
+and `--no-progress` are also accepted.
+
+## MCP server
+
+The same commands are exposed as MCP tools over stdio, so an agent can drive the
+scraper without shelling out.
+
+```bash
+bun run mcp        # stdio server
+bun run mcp:dev    # watch mode
+```
+
+Register it with a client (Claude Code shown):
+
+```bash
+claude mcp add marktplaats -- bun /abs/path/to/backend/src/mcp/index.ts
+```
+
+```json
+{
+  "mcpServers": {
+    "marktplaats": {
+      "command": "bun",
+      "args": ["/abs/path/to/backend/src/mcp/index.ts"],
+      "env": {
+        "WATCH_STORAGE_PATH": "/abs/path/to/backend/marktplaats-watches.json",
+        "MP_SESSION_KEY": "<32-byte base64 key>"
+      }
+    }
+  }
+}
+```
+
+`WATCH_STORAGE_PATH` should be **absolute** — an MCP client's working directory
+is not the project root, so the CLI's relative default would resolve elsewhere and
+the server would see an empty store. `MP_SESSION_KEY` is only needed for the
+`mp_*` tools.
+
+### Tools
+
+One tool per CLI command. Call `prime` first — it returns provider health, the
+resolved storage path, existing watches and accounts, and the tool catalogue.
+
+| Tool | CLI equivalent | Notes |
+|---|---|---|
+| `prime` | `prime` | Overview + catalogue |
+| `search` | `search` | Read-only, hits the network |
+| `detail` | `detail` | Read-only |
+| `seller` | `seller` | Read-only |
+| `categories` | `categories` | Read-only |
+| `status` | `status` | Read-only, local |
+| `watches` | `watches` | Read-only, local |
+| `watch_create` | `watch:create` | Writes storage |
+| `watch_poll` | `watch:poll` | Writes storage, hits the network |
+| `watch_delete` | `watch:delete` | Destructive |
+| `mp_accounts` | `mp:accounts` | Never returns the stored session |
+| `mp_link` | `mp:link` | **Opens a headed browser on the host**, waits up to 5 min |
+| `mp_update_account` | `mp:update-account` | Writes storage |
+| `mp_create_ad` | `mp:create-ad` | **Publishes a real, public ad** |
+
+Tool names use `_` instead of `:` because most clients restrict names to
+`[a-zA-Z0-9_-]`. Results are JSON text matching the CLI's `--json` payload;
+failures come back as `{ error, code }` with `isError` set rather than as a
+transport error.
+
+### Parity
+
+CLI commands and MCP tools are thin adapters over `src/ops/` — the CLI formats
+the result, the MCP server serialises it. Adding an op wires up both. A test in
+`src/mcp/server.test.ts` asserts the tool list matches the command catalogue, so
+the two cannot drift silently.
 
 ## Scripts
 
@@ -125,9 +198,12 @@ src/
 ├── detail.ts          # full listing page
 ├── categories.ts      # category tree
 ├── types.ts           # zod schemas + inferred types
+├── ops/               # shared operations — the CLI and MCP both call these
 ├── providers/         # provider abstraction + html scraper
 ├── server/            # watch daemon + HTTP API
-├── cli/               # commands
+├── poster/            # ad creation via a linked account
+├── cli/               # CLI adapter (formats ops results)
+├── mcp/               # MCP stdio server (serialises ops results)
 └── utils/             # price + text parsing (with tests)
 ```
 

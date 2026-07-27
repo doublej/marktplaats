@@ -53,6 +53,25 @@ Other entry points:
 - `detail.ts`: full listing page scrape
 - `categories.ts`: category tree fetching
 - `providers/`: provider abstraction layer
+- `ops/`: shared operation layer — see below
+- `cli/`, `mcp/`: adapters over `ops/`
+
+### Ops Layer (CLI ↔ MCP parity)
+`src/ops/` holds every operation as a plain async function over zod-validated
+input. `src/cli/` formats those results as markdown/JSON; `src/mcp/` serialises
+them as MCP tool results. Neither adapter contains business logic.
+
+When adding or changing a command:
+1. Put the logic and its input shape in `src/ops/`.
+2. Add the entry to `COMMANDS` in `src/ops/overview.ts` (`command` = CLI name,
+   `tool` = MCP name — MCP names use `_` since clients restrict them to
+   `[a-zA-Z0-9_-]`).
+3. Wire the CLI handler in `src/cli/index.ts` and the tool in `src/mcp/tools.ts`.
+
+`src/mcp/server.test.ts` fails if the tool list and `COMMANDS` diverge.
+
+Ops signal failure by throwing `OpsError` (never `process.exit`) so they can run
+inside the long-lived MCP server. Both adapters render it as `{ error, code }`.
 
 ## Formatting
 - Biome with tabs, 100 char line width

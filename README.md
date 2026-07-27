@@ -7,7 +7,7 @@ Deployed at [marktplaats.jurrejan.com](https://marktplaats.jurrejan.com).
 ## Structure
 
 ```
-backend/      marktplaats-js — TypeScript scraper lib + HTTP server + CLI
+backend/      marktplaats-js — TypeScript scraper lib + HTTP server + CLI + MCP server
 frontend/     SvelteKit 5 UI consuming the lib
 _reference/   Python reference implementation + API spec (source material)
 _archive/     Dead code kept for reference (gitignored)
@@ -15,7 +15,7 @@ _archive/     Dead code kept for reference (gitignored)
 
 ## Layout
 
-- **backend/** is a standalone package (`marktplaats-js`). It exposes a search/detail/category API, a provider layer with failover + circuit breaker, and an HTTP server for watches + notifications.
+- **backend/** is a standalone package (`marktplaats-js`). It exposes a search/detail/category API, a provider layer with failover + circuit breaker, and an HTTP server for watches + notifications. A CLI and an MCP server sit on a shared `src/ops/` layer, so both agent surfaces expose the same commands.
 - **frontend/** imports backend as `file:../backend`, wraps it in SvelteKit server routes, and renders the UI.
 - **_reference/** is the original Python scraper this project was ported from. Includes `MARKTPLAATS_API_SPEC.yaml`, the language-agnostic description of marktplaats.nl's HTML endpoints.
 

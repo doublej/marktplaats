@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { OpsError, VERSION } from "../ops/index.js";
 import { runCategories, runDetail, runSearch, runSeller, runStatus } from "./commands.js";
 import { runMpAccounts, runMpCreateAd, runMpLink, runMpUpdateAccount } from "./mp.js";
 import { type Ctx, createOutput, jsonError, parseFlags } from "./output.js";
@@ -62,7 +63,7 @@ if (argv.includes("--help")) {
 	process.exit(0);
 }
 if (argv.includes("--version")) {
-	process.stdout.write("0.1.0\n");
+	process.stdout.write(`${VERSION}\n`);
 	process.exit(0);
 }
 
@@ -78,7 +79,8 @@ try {
 	await handler(ctx);
 } catch (err) {
 	const msg = err instanceof Error ? err.message : String(err);
-	if (flags.json) jsonError(msg, "EXECUTION_ERROR");
+	const code = err instanceof OpsError ? err.code : undefined;
+	if (flags.json) jsonError(msg, code ?? "EXECUTION_ERROR");
 	out.error(msg);
 	process.exit(1);
 }

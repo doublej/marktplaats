@@ -1,22 +1,21 @@
 import {
-	fetchCategoryTree,
-	fetchListingDetail,
-	fetchSellerListings,
-	fetchSubcategories,
-	getProviderStatus,
-	search,
-} from "../index.js";
+	getCategories,
+	getListingDetail,
+	getSellerListings,
+	getStatus,
+	searchListings,
+} from "../ops/index.js";
 import { centsToEuros, formatEuros } from "../utils/price.js";
 import type { Ctx } from "./output.js";
-import { fail } from "./output.js";
+import { fail, num } from "./output.js";
 
 export async function runSearch(ctx: Ctx): Promise<void> {
 	const query =
 		ctx.flag("query") ?? ctx.positionals[1] ?? fail(ctx, "Missing: query", "MISSING_ARG");
 
-	const listings = await search({
+	const result = await searchListings({
 		query,
-		limit: num(ctx.flag("limit")) ?? 10,
+		limit: num(ctx.flag("limit")),
 		zipCode: ctx.flag("zip"),
 		distance: num(ctx.flag("distance")),
 		priceFromCents: num(ctx.flag("min-price")),
@@ -30,14 +29,14 @@ export async function runSearch(ctx: Ctx): Promise<void> {
 	});
 
 	if (ctx.flags.json) {
-		ctx.out.json({ query, count: listings.length, listings });
+		ctx.out.json(result);
 		return;
 	}
 
-	ctx.out.heading(`Search: "${query}" — ${listings.length} results`, 1);
+	ctx.out.heading(`Search: "${result.query}" — ${result.count} results`, 1);
 	ctx.out.table(
 		["ID", "Price", "Title", "Location", "Status"],
-		listings.map((l) => [
+		result.listings.map((l) => [
 			l.sourceListingId,
 			fmtPrice(l.priceCents, l.price),
 			truncate(l.title, 80),
@@ -49,7 +48,7 @@ export async function runSearch(ctx: Ctx): Promise<void> {
 
 export async function runDetail(ctx: Ctx): Promise<void> {
 	const id = ctx.positionals[1] ?? fail(ctx, "Missing: listing ID", "MISSING_ARG");
-	const detail = await fetchListingDetail(id);
+	const detail = await getListingDetail({ id });
 
 	if (ctx.flags.json) {
 		ctx.out.json(detail);
@@ -81,18 +80,17 @@ export async function runDetail(ctx: Ctx): Promise<void> {
 
 export async function runSeller(ctx: Ctx): Promise<void> {
 	const sellerId = ctx.positionals[1] ?? fail(ctx, "Missing: seller ID", "MISSING_ARG");
-	const limit = num(ctx.flag("limit")) ?? 30;
-	const listings = await fetchSellerListings({ sellerId, limit });
+	const result = await getSellerListings({ sellerId, limit: num(ctx.flag("limit")) });
 
 	if (ctx.flags.json) {
-		ctx.out.json({ sellerId, count: listings.length, listings });
+		ctx.out.json(result);
 		return;
 	}
 
-	ctx.out.heading(`Seller ${sellerId} — ${listings.length} listings`, 1);
+	ctx.out.heading(`Seller ${result.sellerId} — ${result.count} listings`, 1);
 	ctx.out.table(
 		["ID", "Price", "Title", "Location", "Status"],
-		listings.map((l) => [
+		result.listings.map((l) => [
 			l.sourceListingId,
 			fmtPrice(l.priceCents, l.price),
 			truncate(l.title, 80),
@@ -104,36 +102,31 @@ export async function runSeller(ctx: Ctx): Promise<void> {
 
 export async function runCategories(ctx: Ctx): Promise<void> {
 	const slug = ctx.flag("slug");
+	const result = await getCategories({ slug });
 
-	if (slug) {
-		const subcats = await fetchSubcategories(slug);
-		if (ctx.flags.json) {
-			ctx.out.json({ parentSlug: slug, count: subcats.length, categories: subcats });
-			return;
-		}
-		ctx.out.heading(`Subcategories: ${slug}`, 1);
+	if (ctx.flags.json) {
+		ctx.out.json(result);
+		return;
+	}
+
+	if ("parentSlug" in result) {
+		ctx.out.heading(`Subcategories: ${result.parentSlug}`, 1);
 		ctx.out.table(
 			["Slug", "Name"],
-			subcats.map((c) => [c.slug, c.name]),
+			result.categories.map((c) => [c.slug, c.name]),
 		);
 		return;
 	}
 
-	const tree = await fetchCategoryTree();
-	if (ctx.flags.json) {
-		ctx.out.json({ count: tree.categories.length, categories: tree.categories });
-		return;
-	}
-
-	ctx.out.heading(`Categories — ${tree.categories.length} found`, 1);
+	ctx.out.heading(`Categories — ${result.count} found`, 1);
 	ctx.out.table(
 		["Slug", "Name", "Subcategories"],
-		tree.categories.map((c) => [c.slug, c.name, String(c.children?.length ?? 0)]),
+		result.categories.map((c) => [c.slug, c.name, String(c.children?.length ?? 0)]),
 	);
 }
 
 export async function runStatus(ctx: Ctx): Promise<void> {
-	const status = getProviderStatus();
+	const status = getStatus();
 
 	if (ctx.flags.json) {
 		ctx.out.json(status);
@@ -151,12 +144,6 @@ export async function runStatus(ctx: Ctx): Promise<void> {
 			String(p.consecutiveFailures),
 		]),
 	);
-}
-
-function num(v: string | undefined): number | undefined {
-	if (v === undefined) return undefined;
-	const n = Number(v);
-	return Number.isNaN(n) ? undefined : n;
 }
 
 function fmtPrice(cents: number | null, fallback: string): string {

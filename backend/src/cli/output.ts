@@ -60,6 +60,13 @@ export function fail(ctx: Ctx, message: string, code: string): never {
 	return process.exit(1);
 }
 
+/** Parse a numeric flag; undefined when absent or unparseable. */
+export function num(v: string | undefined): number | undefined {
+	if (v === undefined) return undefined;
+	const n = Number(v);
+	return Number.isNaN(n) ? undefined : n;
+}
+
 export function jsonError(message: string, code: string): never {
 	process.stdout.write(`${JSON.stringify({ error: message, code })}\n`);
 	return process.exit(1);

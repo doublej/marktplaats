@@ -8,3 +8,4 @@ build/
 .env.local
 data/
 _archive/
+.claude/settings.local.json

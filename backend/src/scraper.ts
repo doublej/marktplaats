@@ -452,10 +452,109 @@ function extractListingsFromNextData(data: Record<string, unknown>): ListingItem
 	return findListingArrays(data);
 }
 
+// slug → category ids, resolved once per process from the category page's embedded JSON
+const categoryIdCache = new Map<string, { l1?: number; l2?: number }>();
+
+async function resolveCategoryIds(
+	slug: string,
+	timeout: number,
+): Promise<{ l1?: number; l2?: number }> {
+	const cached = categoryIdCache.get(slug);
+	if (cached) return cached;
+
+	const response = await fetch(`${BASE_URL}/l/${slug}/`, {
+		headers: getHeaders(),
+		signal: AbortSignal.timeout(timeout),
+	});
+	if (!response.ok) throw new ScrapingError(`Category page HTTP ${response.status}: ${slug}`);
+	const html = await response.text();
+
+	const ids: { l1?: number; l2?: number } = {};
+	const l1 = /"l1Category":\s*\{[^{}]*?"id":\s*(\d+)/.exec(html);
+	const l2 = /"l2Category":\s*\{[^{}]*?"id":\s*(\d+)/.exec(html);
+	if (l1?.[1]) ids.l1 = Number.parseInt(l1[1], 10);
+	if (l2?.[1]) ids.l2 = Number.parseInt(l2[1], 10);
+	if (ids.l1 === undefined) throw new ScrapingError(`Could not resolve category id for: ${slug}`);
+	categoryIdCache.set(slug, ids);
+	return ids;
+}
+
+/**
+ * Search via the site's own JSON API (/lrp/api/search). The HTML search pages
+ * ignore filter query params (the site moved filters into #fragments), so this
+ * is the only path where postcode/distance/price/sort actually apply.
+ */
+async function buildApiSearchUrl(options: SearchOptions, limit: number): Promise<string> {
+	const { sortBy, sortOrder } = mapSortOptions(options.sortBy, options.sortOrder);
+
+	const url = new URL(`${BASE_URL}/lrp/api/search`);
+	if (options.query) url.searchParams.set("query", options.query);
+	if (options.categorySlug) {
+		const ids = await resolveCategoryIds(options.categorySlug, options.timeout ?? 30000);
+		if (ids.l1 !== undefined) url.searchParams.set("l1CategoryId", ids.l1.toString());
+		if (ids.l2 !== undefined) url.searchParams.set("l2CategoryId", ids.l2.toString());
+	}
+	if (options.zipCode) url.searchParams.set("postcode", options.zipCode);
+	if (options.distance)
+		url.searchParams.set("distanceMeters", (options.distance * 1000).toString());
+	if (options.priceFromCents !== undefined || options.priceToCents !== undefined) {
+		url.searchParams.append(
+			"attributeRanges[]",
+			`PriceCents:${options.priceFromCents ?? "null"}:${options.priceToCents ?? "null"}`,
+		);
+	}
+	if (options.fuel) url.searchParams.append("attributesByKey[]", `fuel:${options.fuel}`);
+	const bodyEntry = options.body ? BODY_SLUG_MAP[options.body] : undefined;
+	if (bodyEntry) url.searchParams.append("attributesById[]", bodyEntry.id);
+	if (sortBy) url.searchParams.set("sortBy", sortBy);
+	if (sortOrder) url.searchParams.set("sortOrder", sortOrder);
+	url.searchParams.set("limit", limit.toString());
+	if (options.page && options.page > 1)
+		url.searchParams.set("offset", ((options.page - 1) * limit).toString());
+	return url.toString();
+}
+
+async function fetchListingsFromApi(options: SearchOptions): Promise<ListingItem[]> {
+	const limit = options.limit ?? 10;
+	const timeout = options.timeout ?? 30000;
+	const url = await buildApiSearchUrl(options, limit);
+
+	const response = await fetch(url, {
+		headers: { ...getHeaders(), Accept: "application/json" },
+		signal: AbortSignal.timeout(timeout),
+	});
+	if (response.status === 429) throw new ScrapingError("Rate limited by Marktplaats");
+	if (!response.ok) throw new ScrapingError(`API HTTP ${response.status}: ${response.statusText}`);
+
+	const data = (await response.json()) as { listings?: Record<string, unknown>[] };
+	if (!Array.isArray(data.listings)) throw new ScrapingError("API response missing listings");
+
+	const seen = new Set<string>();
+	const result: ListingItem[] = [];
+	for (const raw of data.listings) {
+		const item = parseNextDataListing(raw);
+		if (item && !seen.has(item.sourceListingId)) {
+			seen.add(item.sourceListingId);
+			result.push(item);
+		}
+	}
+	return result.slice(0, limit);
+}
+
 /**
  * Fetch and parse listings from Marktplaats
  */
 export async function fetchListings(options: SearchOptions): Promise<ListingItem[]> {
+	// Primary: JSON API — the only path where filters actually apply
+	try {
+		return await fetchListingsFromApi(options);
+	} catch {
+		// fall through to HTML scraping (filters may be ignored there)
+	}
+	return fetchListingsFromHtml(options);
+}
+
+async function fetchListingsFromHtml(options: SearchOptions): Promise<ListingItem[]> {
 	const { sortBy, sortOrder } = mapSortOptions(options.sortBy, options.sortOrder);
 
 	const params: SearchParams = {

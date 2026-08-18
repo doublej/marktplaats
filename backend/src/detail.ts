@@ -201,8 +201,8 @@ export function buildListingUrl(idOrUrl: string): string {
 	if (idOrUrl.startsWith("http")) return idOrUrl;
 
 	const numericId = idOrUrl.replace(/^m/, "");
-	// Marktplaats redirects /a{id} to the full listing URL
-	return `${BASE_URL}/a${numericId}`;
+	// Marktplaats redirects /m{id} to the full listing URL (/a{id} stopped working)
+	return `${BASE_URL}/m${numericId}`;
 }
 
 /**

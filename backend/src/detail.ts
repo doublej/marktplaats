@@ -51,28 +51,56 @@ function getHeaders(): Record<string, string> {
 	};
 }
 
-function extractImages($: ReturnType<typeof load>): string[] {
-	const images: string[] = [];
+/** Image URLs from the page's JSON-LD Product node — the full gallery, in order. */
+function jsonLdProductImages($: ReturnType<typeof load>): string[] {
+	for (const el of $('script[type="application/ld+json"]').toArray()) {
+		let parsed: unknown;
+		try {
+			parsed = JSON.parse($(el).text());
+		} catch {
+			continue;
+		}
+		for (const node of Array.isArray(parsed) ? parsed : [parsed]) {
+			const product = node as { "@type"?: string; image?: unknown };
+			if (product?.["@type"] !== "Product") continue;
+			const list = (Array.isArray(product.image) ? product.image : [product.image]).filter(
+				(url): url is string => typeof url === "string" && url.length > 0,
+			);
+			if (list.length > 0) return list;
+		}
+	}
+	return [];
+}
+
+/**
+ * Gallery images, each one once. Only the JSON-LD Product node carries the
+ * whole gallery: the rendered <img> tags and og:image hold just the first
+ * image, twice, under two different `?rule=` size variants — hence the dedupe
+ * on the URL without its query.
+ */
+export function extractImages($: ReturnType<typeof load>): string[] {
+	const urls = jsonLdProductImages($);
+
+	if (urls.length === 0) {
+		$('[class*="Gallery"] img, [class*="carousel"] img, [class*="image"] img').each((_, el) => {
+			const src = $(el).attr("src") || $(el).attr("data-src");
+			if (src && !src.includes("placeholder")) urls.push(src);
+		});
+		$('meta[property="og:image"]').each((_, el) => {
+			const content = $(el).attr("content");
+			if (content) urls.push(content);
+		});
+	}
+
 	const seen = new Set<string>();
-
-	// Try image carousel/gallery
-	$('[class*="Gallery"] img, [class*="carousel"] img, [class*="image"] img').each((_, el) => {
-		const src = $(el).attr("src") || $(el).attr("data-src");
-		if (src && !src.includes("placeholder") && !seen.has(src)) {
-			seen.add(src);
-			images.push(src.startsWith("//") ? `https:${src}` : src);
-		}
-	});
-
-	// Try og:image meta tags
-	$('meta[property="og:image"]').each((_, el) => {
-		const content = $(el).attr("content");
-		if (content && !seen.has(content)) {
-			seen.add(content);
-			images.push(content);
-		}
-	});
-
+	const images: string[] = [];
+	for (const url of urls) {
+		const absolute = url.startsWith("//") ? `https:${url}` : url;
+		const key = absolute.split("?")[0] ?? absolute;
+		if (seen.has(key)) continue;
+		seen.add(key);
+		images.push(absolute);
+	}
 	return images;
 }
 

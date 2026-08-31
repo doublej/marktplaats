@@ -4,6 +4,7 @@
 	import { searchListings, createWatch, getCategories, getWatches } from '$lib/api/client';
 	import type { ListingItem, Category, WatchConfig } from '$lib/types';
 	import { cacheListings } from '$lib/stores/listings';
+	import { getSearchPrefs, saveSearchPrefs } from '$lib/stores/localStorage';
 	import ListingCard from '$lib/components/results/ListingCard.svelte';
 	import { onMount } from 'svelte';
 
@@ -60,9 +61,10 @@
 
 	// Sync inputs from URL on mount and URL changes
 	$effect(() => {
+		const prefs = getSearchPrefs();
 		queryInput = query;
-		zipCodeInput = zipCode;
-		distanceInput = distance;
+		zipCodeInput = zipCode || prefs.zipCode;
+		distanceInput = distance ?? prefs.distance;
 		priceFromInput = priceFrom;
 		priceToInput = priceTo;
 		limitInput = limit;
@@ -80,7 +82,7 @@
 	let mounted = false;
 	let lastSearchKey = '';
 	$effect(() => {
-		const searchKey = `${query}|${zipCode}|${distance}|${sortBy}|${sortOrder}|${limit}|${pageNum}|${categorySlug}`;
+		const searchKey = `${query}|${zipCode}|${distance}|${priceFrom}|${priceTo}|${sortBy}|${sortOrder}|${limit}|${pageNum}|${categorySlug}`;
 		if (mounted && (query || categorySlug) && searchKey !== lastSearchKey) {
 			lastSearchKey = searchKey;
 			executeSearch();
@@ -134,6 +136,7 @@
 	async function handleSearch(e?: Event) {
 		e?.preventDefault();
 		if (!queryInput.trim() && !categorySlugInput) return;
+		saveSearchPrefs({ zipCode: zipCodeInput.trim(), distance: distanceInput });
 		await goto(buildUrl({ page: undefined }), { keepFocus: true, noScroll: true });
 	}
 
@@ -146,6 +149,8 @@
 				query: query.trim() || '',
 				zipCode: zipCode || undefined,
 				distance: distance || undefined,
+				priceFromCents: priceFrom !== undefined ? priceFrom * 100 : undefined,
+				priceToCents: priceTo !== undefined ? priceTo * 100 : undefined,
 				limit,
 				sortBy,
 				sortOrder,
@@ -267,89 +272,91 @@
 			</div>
 		</div>
 
-		<!-- Filters (always visible when searching) -->
-		{#if searched}
-			<div class="max-w-7xl mx-auto px-4 pb-8 relative z-10">
-				<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-x-8 gap-y-4">
-					<div class="space-y-1">
-						<label for="filter-zip" class="label-minimal">Postcode</label>
-						<input
-							id="filter-zip"
-							type="text"
-							bind:value={zipCodeInput}
-							placeholder="1234AB"
-							maxlength="6"
-							class="input-minimal"
-						/>
-					</div>
+		<!-- Filters (always visible, also before the first search) -->
+		<div class="max-w-7xl mx-auto px-4 pb-8 relative z-10">
+			<div class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-x-8 gap-y-4">
+				<div class="space-y-1">
+					<label for="filter-zip" class="label-minimal">Postcode</label>
+					<input
+						id="filter-zip"
+						type="text"
+						bind:value={zipCodeInput}
+						placeholder="1234AB"
+						maxlength="6"
+						class="input-minimal"
+					/>
+				</div>
 
+				<div class="space-y-1">
+					<label for="filter-distance" class="label-minimal">Afstand</label>
+					<select id="filter-distance" bind:value={distanceInput} class="input-minimal bg-transparent cursor-pointer">
+						{#each distances as d}
+							<option value={d.value}>{d.label}</option>
+						{/each}
+					</select>
+				</div>
+
+				<div class="space-y-1">
+					<label for="filter-price-min" class="label-minimal">Min prijs</label>
+					<input
+						id="filter-price-min"
+						type="number"
+						bind:value={priceFromInput}
+						placeholder="€ 0"
+						min="0"
+						class="input-minimal"
+					/>
+				</div>
+
+				<div class="space-y-1">
+					<label for="filter-price-max" class="label-minimal">Max prijs</label>
+					<input
+						id="filter-price-max"
+						type="number"
+						bind:value={priceToInput}
+						placeholder="€ ∞"
+						min="0"
+						class="input-minimal"
+					/>
+				</div>
+
+				{#if categories.length > 0}
 					<div class="space-y-1">
-						<label for="filter-distance" class="label-minimal">Afstand</label>
-						<select id="filter-distance" bind:value={distanceInput} class="input-minimal bg-transparent cursor-pointer">
-							{#each distances as d}
-								<option value={d.value}>{d.label}</option>
+						<label for="filter-category" class="label-minimal">Categorie</label>
+						<select id="filter-category" bind:value={categorySlugInput} class="input-minimal bg-transparent cursor-pointer">
+							<option value="">Alle</option>
+							{#each categories as cat}
+								<option value={cat.slug}>{cat.name}</option>
 							{/each}
 						</select>
 					</div>
+				{/if}
 
-					<div class="space-y-1">
-						<label for="filter-price-min" class="label-minimal">Min prijs</label>
-						<input
-							id="filter-price-min"
-							type="number"
-							bind:value={priceFromInput}
-							placeholder="€ 0"
-							min="0"
-							class="input-minimal"
-						/>
-					</div>
-
-					<div class="space-y-1">
-						<label for="filter-price-max" class="label-minimal">Max prijs</label>
-						<input
-							id="filter-price-max"
-							type="number"
-							bind:value={priceToInput}
-							placeholder="€ ∞"
-							min="0"
-							class="input-minimal"
-						/>
-					</div>
-
-					{#if categories.length > 0}
-						<div class="space-y-1">
-							<label for="filter-category" class="label-minimal">Categorie</label>
-							<select id="filter-category" bind:value={categorySlugInput} class="input-minimal bg-transparent cursor-pointer">
-								<option value="">Alle</option>
-								{#each categories as cat}
-									<option value={cat.slug}>{cat.name}</option>
-								{/each}
-							</select>
-						</div>
-					{/if}
-
-					<div class="space-y-1">
-						<label for="filter-limit" class="label-minimal">Resultaten</label>
-						<select id="filter-limit" bind:value={limitInput} class="input-minimal bg-transparent cursor-pointer">
-							<option value={25}>25</option>
-							<option value={50}>50</option>
-							<option value={100}>100</option>
-						</select>
-					</div>
-				</div>
-
-				<div class="flex items-center gap-6 mt-6">
-					<button onclick={() => handleSearch()} class="btn-primary">
-						Toepassen
-					</button>
-					{#if hasFilters}
-						<button onclick={clearFilters} class="btn-ghost">
-							Wissen
-						</button>
-					{/if}
+				<div class="space-y-1">
+					<label for="filter-limit" class="label-minimal">Resultaten</label>
+					<select id="filter-limit" bind:value={limitInput} class="input-minimal bg-transparent cursor-pointer">
+						<option value={25}>25</option>
+						<option value={50}>50</option>
+						<option value={100}>100</option>
+					</select>
 				</div>
 			</div>
-		{/if}
+
+			<div class="flex items-center gap-6 mt-6">
+				<button
+					onclick={() => handleSearch()}
+					disabled={!queryInput.trim() && !categorySlugInput}
+					class="btn-primary"
+				>
+					Toepassen
+				</button>
+				{#if hasFilters}
+					<button onclick={clearFilters} class="btn-ghost">
+						Wissen
+					</button>
+				{/if}
+			</div>
+		</div>
 	</div>
 
 	<!-- Main Content -->

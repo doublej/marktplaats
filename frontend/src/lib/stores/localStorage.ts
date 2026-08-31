@@ -102,3 +102,30 @@ export function clearSearchHistory(): void {
 	if (typeof localStorage === 'undefined') return;
 	localStorage.removeItem(SEARCH_HISTORY_KEY);
 }
+
+// Search preferences: location filters, remembered between searches
+const SEARCH_PREFS_KEY = 'mp_search_prefs';
+
+export interface SearchPrefs {
+	zipCode: string;
+	distance: number | undefined;
+}
+
+const EMPTY_PREFS: SearchPrefs = { zipCode: '', distance: undefined };
+
+export function getSearchPrefs(): SearchPrefs {
+	if (typeof localStorage === 'undefined') return EMPTY_PREFS;
+	const stored = localStorage.getItem(SEARCH_PREFS_KEY);
+	if (!stored) return EMPTY_PREFS;
+	try {
+		const parsed = JSON.parse(stored);
+		return { zipCode: parsed.zipCode ?? '', distance: parsed.distance ?? undefined };
+	} catch {
+		return EMPTY_PREFS;
+	}
+}
+
+export function saveSearchPrefs(prefs: SearchPrefs): void {
+	if (typeof localStorage === 'undefined') return;
+	localStorage.setItem(SEARCH_PREFS_KEY, JSON.stringify(prefs));
+}

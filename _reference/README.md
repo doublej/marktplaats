@@ -2,7 +2,7 @@
 
 Source material the TypeScript `backend/` was ported from. **Not built or run** — kept for reference when porting new features or debugging scraping behavior.
 
-Original location: `~/Documents/development/python/MarktplaatsSearch/`
+Original location: `~/dev/python/MarktplaatsSearch/`
 
 ## Contents
 

@@ -53,7 +53,7 @@ async function main() {
 	const key = loadKeyFromEnv();
 	const state = decryptStorageState(account.encryptedStorageState, key);
 
-	// Listing #1 from /Users/jurrejan/Documents/development/_life/Personal/marktplaats-listings-2026-04-11.md
+	// Listing #1 from /Users/jurrejan/dev/_life/Personal/marktplaats-listings-2026-04-11.md
 	const input = CreateAdInputSchema.parse({
 		title: "IKEA PAX schuifdeurkast 150x200 wit met frosted glas",
 		description:
